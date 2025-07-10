@@ -85,6 +85,7 @@ contract NarraLayerVault is
     event MaxCountToCleanUpdated(uint256 maxCount);
 
     event ReceiptClaimed(address indexed user, uint256 indexed receiptID);
+    event StakingTokenCreated(address stakingToken);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -134,6 +135,7 @@ contract NarraLayerVault is
         // Create new staking token
         StakingToken stakingToken = new StakingToken();
         stakingTokenAddress = address(stakingToken);
+        emit StakingTokenCreated(stakingTokenAddress);
 
         // Create vault for newly created token
         address vaultAddress = IRewardVaultFactory(rewardVaultFactory)
@@ -257,7 +259,7 @@ contract NarraLayerVault is
      *         8. Create receipt record
      *         9. Clear expired stakes
      */
-    function burnToStake(address token, uint256 amount) external override {
+    function burnToStake(address token, uint256 amount) external override nonReentrant {
         require(token != stakingTokenAddress, "Cannot stake the staking token itself");
         require(amount > 0, "Amount must be greater than 0");
         require(supportedTokens[token] > 0, "Unsupported token");
@@ -299,6 +301,7 @@ contract NarraLayerVault is
                     receipt.receiptWeight
                 );
                 receipt.cleared = true;
+                emit ReceiptClaimed(receipt.user, nextToCleanReceiptID);
                 cleaned++;
                 nextToCleanReceiptID++;
             } else {
@@ -315,6 +318,17 @@ contract NarraLayerVault is
 
     function _clearStaking() internal {
         _cleanExpiredStakes(maxCountToClean);
+    }
+
+    function claimReceipt(uint256 receiptID) external nonReentrant {
+        Receipt storage receipt = receipts[receiptID];
+        require(!receipt.cleared, "Already cleared");
+        require(receipt.user == msg.sender, "Not receipt owner");
+        require(block.timestamp > receipt.clearedAt, "Cooldown not passed");
+
+        IRewardVault(rewardVault).delegateWithdraw(receipt.user, receipt.receiptWeight);
+        receipt.cleared = true;
+        emit ReceiptClaimed(msg.sender, receiptID);
     }
 
 }
