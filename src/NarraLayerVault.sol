@@ -10,6 +10,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./interfaces/IRewardVaultFactory.sol";
 import "./interfaces/IRewardVault.sol";
 import "./token/StakingToken.sol";
+import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
 
 /**
  * @title NarraLayerVault
@@ -27,7 +28,8 @@ contract NarraLayerVault is
     INarraLayerVault,
     Initializable,
     UUPSUpgradeable,
-    AccessControlUpgradeable
+    AccessControlUpgradeable,
+    ReentrancyGuardUpgradeable
 {
     using SafeERC20 for IERC20;
 
@@ -77,6 +79,8 @@ contract NarraLayerVault is
     event BurnToStake(address indexed user, address indexed token, uint256 amount, uint256 receiptID);
     event MaxCountToCleanUpdated(uint256 maxCount);
 
+    event ReceiptClaimed(address indexed user, uint256 indexed receiptID);
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
@@ -98,6 +102,7 @@ contract NarraLayerVault is
 
         __AccessControl_init();
         __UUPSUpgradeable_init();
+        __ReentrancyGuard_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, params.defaultAdmin);
         _grantRole(UPGRADER_ROLE, params.defaultAdmin);
@@ -227,7 +232,7 @@ contract NarraLayerVault is
      *         8. Create receipt record
      *         9. Clear expired stakes
      */
-    function burnToStake(address token, uint256 amount) external override {
+    function burnToStake(address token, uint256 amount) external override nonReentrant {
         require(token != stakingTokenAddress, "Cannot stake the staking token itself");
         require(amount > 0, "Amount must be greater than 0");
         require(supportedTokens[token] > 0, "Unsupported token");
@@ -275,13 +280,24 @@ contract NarraLayerVault is
         }
     }
 
-    function cleanExpiredStakes(uint256 maxCount) external override {
+    function cleanExpiredStakes(uint256 maxCount) external override nonReentrant {
         require(maxCount > 0, "Max count must be greater than zero");
         _cleanExpiredStakes(maxCount);
     }
 
     function _clearStaking() internal {
         _cleanExpiredStakes(maxCountToClean);
+    }
+
+    function claimReceipt(uint256 receiptID) external nonReentrant {
+        Receipt storage receipt = receipts[receiptID];
+        require(!receipt.cleared, "Already cleared");
+        require(receipt.user == msg.sender, "Not receipt owner");
+        require(block.timestamp > receipt.clearedAt, "Cooldown not passed");
+
+        IRewardVault(rewardVault).delegateWithdraw(receipt.user, receipt.receiptWeight);
+        receipt.cleared = true;
+        emit ReceiptClaimed(msg.sender, receiptID);
     }
 
 }
